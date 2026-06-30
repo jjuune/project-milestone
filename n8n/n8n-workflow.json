@@ -1,0 +1,360 @@
+{
+  "name": "스마트 차계부 텔레그램 연동 워크플로우",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger-node",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        380,
+        240
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-api-credential-id",
+          "name": "Telegram Bot API Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.text }}",
+                    "rightValue": "/mileage",
+                    "operator": "startsWith"
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameKeys": {},
+              "value": "start_flow"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.callback_query.data }}",
+                    "rightValue": "car_id:",
+                    "operator": "startsWith"
+                  }
+                ],
+                "combinator": "or"
+              },
+              "value": "car_selected"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.reply_to_message.text }}",
+                    "rightValue": "🚗 [",
+                    "operator": "startsWith"
+                  }
+                ],
+                "combinator": "or"
+              },
+              "value": "mileage_reply"
+            }
+          ]
+        },
+        "fallbackOutput": "unknown"
+      },
+      "id": "routing-node",
+      "name": "Route Event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        580,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.VITE_SUPABASE_URL }}/rest/v1/vehicles",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.VITE_SUPABASE_ANON_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.VITE_SUPABASE_ANON_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-vehicles-node",
+      "name": "Fetch Vehicles from Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        820,
+        120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-header-auth-id",
+          "name": "Supabase Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "🚗 주행거리를 기록할 차량을 선택해주세요:",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": "={\n  \"inline_keyboard\": [\n    [\n      {\n        \"text\": \"{{ $json.name }} ({{ $json.model }})\",\n        \"callback_data\": \"car_id:{{ $json.id }}:{{ $json.name }}\"\n      }\n    ]\n  ]\n}",
+        "additionalFields": {}
+      },
+      "id": "send-car-buttons-node",
+      "name": "Send Vehicle List Buttons",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        120
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-api-credential-id",
+          "name": "Telegram Bot API Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const callbackData = $('Telegram Trigger').item.json.callback_query.data;\nconst parts = callbackData.split(':');\nreturn {\n  carId: parts[1],\n  carName: parts[2]\n};"
+      },
+      "id": "parse-car-selection-node",
+      "name": "Parse Selected Car",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.callback_query.message.chat.id }}",
+        "text": "=🚗 [{{ $json.carName }}] 차량의 현재 누적 주행거리를 숫자로만 '답장'으로 입력해 주세요.\n(식별 코드: {{ $json.carId }})",
+        "replyMarkup": "={\n  \"force_reply\": true,\n  \"selective\": true\n}",
+        "additionalFields": {}
+      },
+      "id": "send-force-reply-node",
+      "name": "Request Mileage ForceReply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        240
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-api-credential-id",
+          "name": "Telegram Bot API Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const messageText = $('Telegram Trigger').item.json.message.text;\nconst replyToText = $('Telegram Trigger').item.json.message.reply_to_message.text;\n\n// ForceReply 안내 메시지에서 차량 ID 추출\nconst carIdMatch = replyToText.match(/식별 코드:\\s*([0-9a-fA-F-]{36})/);\nconst carNameMatch = replyToText.match(/🚗\\s*\\[(.*?)\\]/);\nconst mileageNum = parseInt(messageText.replace(/[^0-9]/g, ''));\n\nif (!carIdMatch || isNaN(mileageNum)) {\n  throw new Error('올바른 차량 정보 또는 주행거리를 판별할 수 없습니다.');\n}\n\nreturn {\n  vehicle_id: carIdMatch[1],\n  vehicle_name: carNameMatch ? carNameMatch[1] : '차량',\n  mileage: mileageNum\n};"
+      },
+      "id": "parse-reply-mileage-node",
+      "name": "Parse Reply Mileage & Car",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.VITE_SUPABASE_URL }}/rest/v1/mileage_logs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.VITE_SUPABASE_ANON_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.VITE_SUPABASE_ANON_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"vehicle_id\": \"{{ $json.vehicle_id }}\",\n  \"mileage\": {{ $json.mileage }}\n}",
+        "options": {}
+      },
+      "id": "insert-mileage-node",
+      "name": "Save Mileage to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1040,
+        380
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-header-auth-id",
+          "name": "Supabase Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=✅ [{{ $('Parse Reply Mileage & Car').item.json.vehicle_name }}] 차량의 누적 주행거리가 성공적으로 등록되었습니다!\n\n🔹 등록된 주행거리: {{ $('Parse Reply Mileage & Car').item.json.mileage.toLocaleString() }} km\n\n대시보드에서 실시간 리포트를 확인해 보세요! 🚀\n(대시보드 주소: {{ $env.VITE_DASHBOARD_URL || '로컬 호스팅 주소' }})",
+        "additionalFields": {}
+      },
+      "id": "send-success-message-node",
+      "name": "Send Save Success Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        1260,
+        380
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-api-credential-id",
+          "name": "Telegram Bot API Credential"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Route Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Event": {
+      "main": [
+        [
+          {
+            "node": "Fetch Vehicles from Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Selected Car",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Reply Mileage & Car",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Vehicles from Supabase": {
+      "main": [
+        [
+          {
+            "node": "Send Vehicle List Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Selected Car": {
+      "main": [
+        [
+          {
+            "node": "Request Mileage ForceReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Reply Mileage & Car": {
+      "main": [
+        [
+          {
+            "node": "Save Mileage to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Mileage to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Send Save Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
