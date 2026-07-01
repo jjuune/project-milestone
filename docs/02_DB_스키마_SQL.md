@@ -173,6 +173,14 @@ CREATE POLICY org_access_events ON vehicle_events
                 (SELECT organization_id FROM profiles WHERE id = auth.uid())
         )
     );
+
+-- profiles: 본인 행 조회 허용
+-- (vehicles/vehicle_events RLS 정책의 서브쿼리가 이 정책에 의존함)
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "본인 프로필 조회 가능" ON profiles
+  FOR SELECT USING (id = auth.uid());
+
 ```
 
 ---
